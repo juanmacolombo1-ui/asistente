@@ -218,6 +218,8 @@ const COMMANDS = [
 export function parseCommand(text) {
   const t = normalize(text);
   if (!t) return { intent: 'unknown' };
+  const sh = parseShopping(text);
+  if (sh) return sh;
   const sw = parseSwitch(t);
   if (sw) return sw;
   for (const [intent, re] of COMMANDS) {
@@ -278,4 +280,48 @@ export function findTask(text, tasks, preferIds = new Set()) {
     if (!best || score > best.score) best = { task: t, score, ratio: hit / q.length };
   }
   return best && best.ratio >= 0.5 ? best.task : null;
+}
+
+// ---------- Compras y mandados ----------
+
+/** «leche, pan y yerba» -> ['Leche', 'Pan', 'Yerba'] */
+export function splitItems(text) {
+  return String(text || '')
+    .split(/\s*(?:,|;|\n|\s+y\s+|\s+e\s+)\s*/i)
+    .map((s) => s.trim().replace(/[.!]+$/, ''))
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1));
+}
+
+// Pasa a minúsculas y saca tildes letra por letra, para que las posiciones coincidan con el texto original.
+const fold = (s) => [...s].map((c) => c.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase() || c).join('');
+
+const LIST_RES = [
+  /^\s*(?:agrega|agregame|agregar|anota|anotame|anotar|suma|sumame|pone|poneme|pon)\s+(.+?)\s+(?:a|en)\s+la\s+lista(?:\s+de\s+(?:compras|(?:del\s+)?super|mandados))?\s*[.!]?\s*$/d,
+  /^\s*(?:lista(?:\s+de\s+compras)?\s*:|para\s+comprar\s*:?|hay\s+que\s+comprar|falta|faltan|se\s+termino|se\s+terminaron|se\s+acabo|se\s+acabaron)\s+(.+?)\s*[.!]?\s*$/d,
+];
+const ERRAND_RES = [
+  /\b(?:tengo\s+que|me\s+tengo\s+que|necesito|voy\s+a|me\s+voy\s+a)\s+(?:salir|ir)\b(?:\s+a\b)?\s*(.*?)\s*[.!]?\s*$/d,
+  /\b(?:salgo|me\s+voy|voy)\s+a\s+((?:comprar|hacer|la\s+farmacia|al\s|pagar|buscar).*?)\s*[.!]?\s*$/d,
+];
+
+/** Comandos de compras: agregar a la lista, salir a un mandado, volver. */
+export function parseShopping(text) {
+  const f = fold(String(text || ''));
+  const grab = (re) => {
+    const m = re.exec(f);
+    if (!m) return null;
+    const [a, b] = m.indices[1];
+    return text.slice(a, b).trim();
+  };
+  for (const re of LIST_RES) {
+    const v = grab(re);
+    if (v) return { intent: 'list', items: splitItems(v) };
+  }
+  if (/^\s*(?:ya\s+)?(?:volvi|regrese|llegue|estoy\s+de\s+vuelta)\b/.test(f)) return { intent: 'back' };
+  for (const re of ERRAND_RES) {
+    const v = grab(re);
+    if (v !== null) return { intent: 'errand', what: v };
+  }
+  return null;
 }

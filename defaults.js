@@ -198,6 +198,7 @@ export function emptyState(today = dateKey()) {
     occ: {}, // `${taskId}@${fecha}` -> instancia del día
     projects: [],
     focus: [], // sesiones de concentración
+    shopping: [], // lista de compras {id, text, done, doneAt}
     durationLog: {}, // taskId -> [{date, est, actual}]
     alarmLog: {}, // claves de alarmas ya disparadas
   };

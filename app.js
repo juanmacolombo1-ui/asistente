@@ -5,7 +5,7 @@ import {
   planDay, nowAndNext, computeAlarms, announceStart, morningBrief, pendingDecisions, diffPlans,
   validateFixedTime, occKey, getDayType, occursOn, taskPhrase, isWorkDay,
 } from './planner.js';
-import { parseTaskText, parseCommand, normalize, findTask } from './parser.js';
+import { parseTaskText, parseCommand, normalize, findTask, splitItems } from './parser.js';
 import { recordActual, applyLearning } from './learning.js';
 import { computeStats, rangeFor, reasonLabel } from './stats.js';
 import { buildICS } from './ics.js';
@@ -134,7 +134,7 @@ function render() {
   renderTop();
   $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
   const view = $('#view');
-  const fn = { ahora: viewAhora, agenda: viewAgenda, tareas: viewTareas, proyectos: viewProyectos, mas: viewMas }[ui.tab];
+  const fn = { ahora: viewAhora, agenda: viewAgenda, tareas: viewTareas, compras: viewCompras, proyectos: viewProyectos, mas: viewMas }[ui.tab];
   view.innerHTML = fn();
   ui.lastMinute = Math.floor(nowMin());
 }
@@ -199,6 +199,7 @@ function viewAhora() {
       <button class="chip" data-act="cmd" data-text="Reorganizá mi día">Reorganizá mi día</button>
       <button class="chip" data-act="cmd" data-text="Estoy cansado">Estoy cansado</button>
       <button class="chip" data-act="switch">↔ Hacer otra cosa</button>
+      <button class="chip" data-act="errand">🏃 Tengo que salir</button>
       <button class="chip" data-act="brief">🔈 Mi día</button>
       <button class="chip" data-act="focus" data-min="${state.settings.focus.defaultMin}">⏱ Concentración</button>
     </div>`);
@@ -230,10 +231,11 @@ function heroCard(p, current, nextTask, late) {
       ${step ? `<div class="step">${esc(step)}</div>` : ''}
       ${stepsChecklist(current)}
       <div class="btns">
-        <button class="btn ok big full" data-act="done" data-key="${current.key}">✓ Terminé</button>
+        <button class="btn ok big full" data-act="done" data-key="${current.key}">${current.category === 'compras' ? '🏠 Volví' : '✓ Terminé'}</button>
         <button class="btn" data-act="more" data-key="${current.key}" data-min="10">+10 min</button>
         <button class="btn" data-act="focus" data-key="${current.key}" data-min="${Math.min(60, Math.max(5, Math.round(end - n)))}">⏱ Concentrarme</button>
         <button class="btn full" data-act="switch" data-key="${current.key}">↔ Cambiar a otra tarea</button>
+        ${current.category === 'compras' ? '' : '<button class="btn full" data-act="errand">🏃 Tengo que salir (queda en pausa)</button>'}
         <button class="btn ghost full" data-act="cant" data-key="${current.key}">No puedo seguir ahora</button>
       </div></div>`;
   }
@@ -254,12 +256,14 @@ function heroCard(p, current, nextTask, late) {
       <div class="title">${esc(t.label)}${t.parts ? ` <span class="chip">${t.part}/${t.parts}</span>` : ''}</div>
       <div class="when">${fmtHM(t.taskStart)}–${fmtHM(t.taskEnd)} · ${durationShort(t.durationMin)}</div>
       <div class="muted small">${started ? (late.includes(t) ? `Estaba para las ${fmtHM(t.start)}` : 'Es ahora') : liveCountdown(t.start, 'Empieza en')}${t.taskStart > t.start ? ` · salís ${fmtHM(t.start + (taskById(t.taskId)?.prepMin || 0))}` : ''}</div>
+      ${state.occ[t.key]?.paused ? `<div class="step">⏸ La dejaste en pausa: te quedan unos ${Math.max(5, t.durationMin - (state.occ[t.key].elapsedBefore || 0))} min.</div>` : ''}
       ${step ? `<div class="step">${esc(step)}</div>` : ''}
       <div class="btns">
         <button class="btn primary big full" data-act="start" data-key="${t.key}">▶ Empezar</button>
         <button class="btn" data-act="done" data-key="${t.key}">✓ Ya la hice</button>
         <button class="btn" data-act="cant" data-key="${t.key}">No puedo</button>
         <button class="btn full" data-act="switch" data-key="${t.key}">↔ Empecé por otra tarea</button>
+        <button class="btn full" data-act="errand">🏃 Tengo que salir</button>
         <button class="btn ghost full" data-act="announce" data-key="${t.key}">🔈 Escuchar</button>
       </div></div>`;
   }
@@ -270,6 +274,7 @@ function heroCard(p, current, nextTask, late) {
 
 function stepsChecklist(block) {
   const task = taskById(block.taskId);
+  if (task && task.category === 'compras') return shopChecklist(block);
   if (!task || !task.steps.length) return '';
   const occ = state.occ[block.key] || {};
   const done = occ.stepsDone || [];
@@ -816,6 +821,7 @@ function startTask(key) {
   for (const [k, o] of Object.entries(state.occ)) {
     if (o.status === 'en_curso' && k !== key) {
       o.status = 'pendiente';
+      o.elapsedBefore = (o.elapsedBefore || 0) + Math.max(0, Math.round(nowMin() - (o.startMin ?? nowMin()))); // recordar lo avanzado
       delete o.startMin;
     }
   }
@@ -826,6 +832,8 @@ function startTask(key) {
   occ.startedAt = new Date().toISOString();
   occ.plannedStart = b ? b.start : occ.startMin;
   occ.extraMin = 0;
+  occ.paused = false;
+  occ.resumeFirst = false;
   closeAlarm();
   keepScreenOn(true);
   commit();
@@ -839,7 +847,7 @@ function openDoneSheet(key) {
   const task = taskById(taskId);
   const occ = ensureOcc(key);
   const est = (occ.durationOverride || task.durationMin);
-  const actual = occ.startMin != null && occ.status === 'en_curso' ? Math.max(1, Math.round(nowMin() - occ.startMin)) : est;
+  const actual = occ.startMin != null && occ.status === 'en_curso' ? Math.max(1, Math.round(nowMin() - occ.startMin + (occ.elapsedBefore || 0))) : est;
   const project = task.projectId ? projectById(task.projectId) : null;
   openSheet(`<h2>¡Terminaste! 👏</h2><p class="muted">${esc(task.name)}</p>
     <label class="field"><span>¿Cuánto tardaste? (min) — opcional</span><input type="number" id="actualMin" value="${actual}" min="1" inputmode="numeric"></label>
@@ -895,6 +903,10 @@ function saveDone(key, skip) {
     msg += gap >= 10 ? ` Ahora tenés un descanso de ${durationWords(gap)} hasta ${taskPhrase(nn.nextTask.label)}.` : ` Sigue ${taskPhrase(nn.nextTask.label)}.`;
   } else msg += ' No queda nada más programado por hoy.';
   say(msg);
+  if (occ.returnTo) {
+    const back = state.occ[occ.returnTo];
+    if (back && back.status === 'pendiente') setTimeout(() => openResumeSheet(occ.returnTo), 300);
+  }
 }
 
 function moreTime(key, min) {
@@ -1141,6 +1153,134 @@ function blockMenu(key) {
       <button class="btn" data-act="announce" data-key="${key}">🔈 Escuchar</button>`}
       <button class="btn ghost full" data-act="editTask" data-id="${task.id}">Editar la tarea</button>
     </div>`);
+}
+
+// ---------- Compras y mandados ----------
+
+function addShopItems(list) {
+  const added = [];
+  for (const raw of list) {
+    const text = String(raw || '').trim();
+    if (!text) continue;
+    const n = normalize(text);
+    if (state.shopping.some((i) => !i.done && normalize(i.text) === n)) continue;
+    state.shopping.push({ id: newId(), text, done: false, addedAt: new Date().toISOString() });
+    added.push(text);
+  }
+  return added;
+}
+
+function shopItem(i) {
+  return `<li><label class="row grow"><input type="checkbox" data-act="shopToggle" data-id="${i.id}" ${i.done ? 'checked' : ''}> <span class="${i.done ? 'muted' : ''}" ${i.done ? 'style="text-decoration:line-through"' : ''}>${esc(i.text)}</span></label><button class="btn sm ghost" data-act="shopDel" data-id="${i.id}" aria-label="Quitar">✕</button></li>`;
+}
+
+/** Lista para tildar mientras se hace una tarea de compras. */
+function shopChecklist(block) {
+  const occ = state.occ[block.key] || {};
+  const items = occ.itemIds && occ.itemIds.length
+    ? state.shopping.filter((i) => occ.itemIds.includes(i.id))
+    : state.shopping.filter((i) => !i.done || (occ.startedAt && i.doneAt && i.doneAt >= occ.startedAt));
+  if (!items.length) return '<div class="step">🛒 No hay nada en la lista de compras. Podés agregar cosas en la pestaña Compras.</div>';
+  const left = items.filter((i) => !i.done).length;
+  return `<div class="section-title">Para comprar · ${left ? `faltan ${left}` : 'todo listo ✓'}</div><ul class="list">${items.map(shopItem).join('')}</ul>`;
+}
+
+function viewCompras() {
+  const pend = state.shopping.filter((i) => !i.done);
+  const done = state.shopping.filter((i) => i.done);
+  const trips = state.tasks.filter((t) => !t.archived && !t.adhoc && t.category === 'compras');
+  return `<div class="card">
+    <button class="btn primary big" data-act="errand">🏃 Tengo que salir ahora</button>
+    <p class="small muted" style="margin:10px 0 0">Si estás en medio de una tarea, queda en pausa y la retomás cuando vuelvas.</p></div>
+  <div class="section-title">Lista de compras · ${pend.length}</div>
+  <div class="card">
+    <div class="quickadd"><input type="text" id="shopAdd" placeholder="Ej: leche, pan y piedritas" autocomplete="off" enterkeyhint="done">
+    <button class="mic" data-act="listenShop" aria-label="Dictar">🎙️</button></div>
+    <button class="btn" style="width:100%;margin-top:10px" data-act="shopAdd">+ Agregar a la lista</button>
+    ${pend.length ? `<ul class="list" style="margin-top:8px">${pend.map(shopItem).join('')}</ul>` : '<div class="empty small">La lista está vacía.</div>'}
+    ${done.length ? `<div class="section-title">Comprado</div><ul class="list">${done.slice(-15).reverse().map(shopItem).join('')}</ul>
+    <button class="btn sm ghost" style="margin-top:8px" data-act="shopClear">Borrar lo comprado</button>` : ''}
+  </div>
+  <div class="section-title">Salidas planificadas</div>
+  <div class="card">${trips.length ? `<ul class="list">${trips.map((t) => `<li data-act="editTask" data-id="${t.id}" style="cursor:pointer"><div class="grow"><div class="name">${esc(t.name)}</div>
+    <div class="small muted">${durationShort(t.durationMin)}${t.travelMin ? ` + ${t.travelMin} min de viaje por tramo` : ''} · ${esc(recText(t))}</div></div><span class="muted">›</span></li>`).join('')}</ul>` : '<div class="small muted">No hay salidas planificadas.</div>'}
+    <button class="btn" style="width:100%;margin-top:10px" data-act="planErrand">+ Planificar una salida</button></div>
+  <p class="tiny muted" style="margin:14px 4px">Cuando empezás una salida de la categoría Compras, la app te muestra esta lista para ir tildando lo que comprás. También podés decir: «Agregá yerba y azúcar a la lista», «Tengo que ir a comprar pan» o «Volví».</p>`;
+}
+
+function openErrandSheet(what = '') {
+  const runningKey = Object.keys(state.occ).find((k) => state.occ[k].status === 'en_curso');
+  const rTask = runningKey ? taskById(runningKey.split('@')[0]) : null;
+  const pend = state.shopping.filter((i) => !i.done);
+  openSheet(`<h2>🏃 Salir a un mandado</h2>
+    ${rTask ? `<p class="small muted">«${esc(rTask.name)}» queda en pausa. Cuando vuelvas, seguís donde la dejaste.</p>` : ''}
+    <label class="field"><span>¿A qué salís?</span><input type="text" id="erWhat" value="${esc(what)}" placeholder="Ej: comprar piedritas y pan, ir al banco" autocomplete="off"></label>
+    ${pend.length ? `<div class="section-title">Sumar de tu lista de compras</div><ul class="list">${pend.map((i) => `<li><label class="row grow"><input type="checkbox" class="erItem" value="${i.id}"> <span>${esc(i.text)}</span></label></li>`).join('')}</ul>` : ''}
+    <div class="section-title">¿Cuánto calculás que tardás?</div>
+    <div class="row wrap" id="erMins">${[15, 30, 45, 60, 90].map((m) => `<button class="chip ${m === 30 ? 'on' : ''}" data-m="${m}">${m} min</button>`).join('')}</div>
+    <div class="btns"><button class="btn primary big full" data-act="errandGo">🏃 Salir ahora</button>
+    <button class="btn ghost full" data-act="closeSheet">Cancelar</button></div>`, (sheet) => {
+    $$('#erMins [data-m]', sheet).forEach((b) => b.addEventListener('click', () => {
+      $$('#erMins [data-m]', sheet).forEach((x) => x.classList.toggle('on', x === b));
+    }));
+  });
+}
+
+function startErrand(what, itemIds, minutes) {
+  const n = nowMin();
+  let paused = null;
+  for (const [k, o] of Object.entries(state.occ)) {
+    if (o.status !== 'en_curso') continue;
+    const t = taskById(k.split('@')[0]);
+    if (t && t.adhoc && t.category === 'descanso') {
+      o.status = 'completada';
+      o.actualMin = Math.max(1, Math.round(n - o.startMin));
+      continue;
+    }
+    o.elapsedBefore = (o.elapsedBefore || 0) + Math.max(0, Math.round(n - (o.startMin ?? n)));
+    o.status = 'pendiente';
+    delete o.startMin;
+    o.paused = true;
+    o.resumeFirst = true;
+    o.pinnedStart = null;
+    if (t) paused = { key: k, task: t };
+  }
+  const items = [...itemIds];
+  const m = /^comprar\s+(.+)$/i.exec(what);
+  if (m) {
+    const list = splitItems(m[1]);
+    addShopItems(list);
+    for (const it of list) {
+      const f = state.shopping.find((i) => !i.done && normalize(i.text) === normalize(it));
+      if (f && !items.includes(f.id)) items.push(f.id);
+    }
+  }
+  let name = what ? what.charAt(0).toUpperCase() + what.slice(1) : (items.length ? 'Ir a comprar' : 'Mandado');
+  if (/^(al|a la|a los|a las)\s/i.test(what)) name = `Ir ${what}`;
+  const task = newTask({ name, category: 'compras', durationMin: minutes, date: today(), startDate: today(), adhoc: true, priority: 1 });
+  state.tasks.push(task);
+  state.occ[occKey(task.id, today())] = {
+    status: 'en_curso', startMin: Math.floor(n), startedAt: new Date().toISOString(), plannedStart: Math.floor(n),
+    extraMin: 0, itemIds: items, returnTo: paused ? paused.key : null,
+  };
+  closeSheet();
+  closeAlarm();
+  keepScreenOn(false);
+  ui.tab = 'ahora';
+  commit(paused ? `«${paused.task.name}» quedó en pausa. Cuando vuelvas, tocá «🏠 Volví».` : 'Mandado en curso. Cuando vuelvas, tocá «🏠 Volví».');
+  say(`Dale, andá tranquilo.${paused ? ` Dejo en pausa ${taskPhrase(paused.task.name)}.` : ''}${items.length ? ` Tenés ${items.length === 1 ? 'una cosa' : `${items.length} cosas`} para comprar.` : ''} Cuando vuelvas, avisame.`);
+}
+
+function openResumeSheet(key) {
+  const occ = state.occ[key];
+  const task = taskById(key.split('@')[0]);
+  if (!occ || !task || occ.status !== 'pendiente') return;
+  const left = Math.max(5, (occ.durationOverride || task.durationMin) - (occ.elapsedBefore || 0));
+  openSheet(`<h2>¡Volviste! 🏠</h2>
+    <p class="muted">¿Seguimos con «${esc(task.name)}»? Te quedan unos ${left} min${occ.elapsedBefore ? ` (ya llevabas ${occ.elapsedBefore})` : ''}.</p>
+    <div class="btns"><button class="btn primary big full" data-act="start" data-key="${key}">▶ Seguir ahora</button>
+    <button class="btn full" data-act="closeSheet">Más tarde</button></div>`);
+  say(`Volviste. ¿Seguimos con ${taskPhrase(task.name)}? Te quedan unos ${durationWords(left)}.`);
 }
 
 // ---------- Cambiar de tarea ----------
@@ -1454,6 +1594,28 @@ function handleCommand(text) {
     case 'cant':
       if (b) openCantSheet(b.key);
       break;
+    case 'list': {
+      const added = addShopItems(c.items);
+      commit(added.length ? `Anoté en la lista: ${added.join(', ')}` : 'Eso ya estaba en la lista.');
+      say(added.length ? `Listo, anoté ${added.join(', ')}.` : 'Eso ya estaba en la lista.');
+      break;
+    }
+    case 'errand':
+      openErrandSheet(c.what || '');
+      break;
+    case 'back': {
+      if (running && running.category === 'compras') {
+        openDoneSheet(running.key);
+        break;
+      }
+      const pk = Object.keys(state.occ).find((k) => state.occ[k].paused && state.occ[k].status === 'pendiente');
+      if (pk) openResumeSheet(pk);
+      else {
+        toast('¡Bienvenido de vuelta!');
+        say('Bienvenido de vuelta.');
+      }
+      break;
+    }
     case 'switch': {
       let from = running || b;
       if (c.instead) {
@@ -1603,6 +1765,32 @@ const ACTIONS = {
   },
   switchPick: (d) => switchTo(d.id, d.from || null),
   switchNew: (d) => switchNew($('#swq')?.value, d.from || null),
+  shopAdd: () => {
+    const added = addShopItems(splitItems($('#shopAdd')?.value || ''));
+    commit(added.length ? `Anotado: ${added.join(', ')}` : 'Eso ya estaba en la lista.');
+    setTimeout(() => $('#shopAdd')?.focus(), 50);
+  },
+  shopToggle: (d, el) => {
+    const it = state.shopping.find((i) => i.id === d.id);
+    if (!it) return;
+    it.done = !!el.checked;
+    it.doneAt = it.done ? new Date().toISOString() : null;
+    commit();
+  },
+  shopDel: (d) => { state.shopping = state.shopping.filter((i) => i.id !== d.id); commit(); },
+  shopClear: () => { state.shopping = state.shopping.filter((i) => !i.done); commit('Lista limpia'); },
+  listenShop: () => listen((t) => {
+    const added = addShopItems(splitItems(t));
+    commit(added.length ? `Anotado: ${added.join(', ')}` : 'No entendí qué agregar.');
+  }),
+  errand: () => openErrandSheet(''),
+  errandGo: () => {
+    const what = ($('#erWhat')?.value || '').trim();
+    const ids = $$('.erItem').filter((x) => x.checked).map((x) => x.value);
+    const mins = Number($('#erMins .on')?.dataset.m || 30);
+    startErrand(what, ids, mins);
+  },
+  planErrand: () => openTaskForm(newTask({ name: 'Ir a comprar', category: 'compras', durationMin: 30, travelMin: 10, date: today(), startDate: today() })),
   snooze: (d) => { if (!isTest(d.key)) snooze(d.key, d.min); },
   announce: (d) => {
     if (d.key === 'prueba@x') return speak('Es hora de limpiar la casa. Esto es una prueba.');
@@ -1836,6 +2024,10 @@ function bindEvents() {
     if (e.target.id === 'qa' && e.target.value.trim()) {
       e.preventDefault();
       addFromText(e.target.value);
+    }
+    if (e.target.id === 'shopAdd' && e.target.value.trim()) {
+      e.preventDefault();
+      ACTIONS.shopAdd();
     }
   });
   document.addEventListener('visibilitychange', () => {

@@ -44,7 +44,7 @@ export function migrate(raw) {
   st.settings = { ...defs, ...(raw.settings || {}) };
   for (const k of ['shifts', 'alarm', 'focus', 'projects', 'rotation']) st.settings[k] = { ...defs[k], ...((raw.settings || {})[k] || {}) };
   st.settings.profiles = { ...defs.profiles, ...((raw.settings || {}).profiles || {}) };
-  for (const k of ['tasks', 'projects', 'focus']) if (!Array.isArray(st[k])) st[k] = [];
+  for (const k of ['tasks', 'projects', 'focus', 'shopping']) if (!Array.isArray(st[k])) st[k] = [];
   for (const k of ['occ', 'durationLog', 'alarmLog']) if (!st[k] || typeof st[k] !== 'object') st[k] = {};
   return st;
 }

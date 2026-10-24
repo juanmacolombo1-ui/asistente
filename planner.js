@@ -138,7 +138,7 @@ export function effectiveDuration(task, occ) {
 }
 
 function footprint(task, occ) {
-  const dur = effectiveDuration(task, occ);
+  const dur = Math.max(5, effectiveDuration(task, occ) - ((occ && occ.elapsedBefore) || 0)); // lo que falta
   const active = task.activeMin && task.activeMin < dur ? task.activeMin : dur;
   return (Number(task.prepMin) || 0) + 2 * (Number(task.travelMin) || 0) + active;
 }
@@ -210,7 +210,8 @@ function taskBlock(inst, start, len, extra = {}) {
   const travel = Number(task.travelMin) || 0;
   const taskStart = start + prep + travel;
   const dur = effectiveDuration(task, occ);
-  const active = task.activeMin && task.activeMin < dur ? task.activeMin : dur;
+  const left = Math.max(5, dur - ((occ && occ.elapsedBefore) || 0)); // si se pausó, solo lo que falta
+  const active = task.activeMin && task.activeMin < left ? task.activeMin : left;
   return {
     type: 'task',
     key: inst.key,
@@ -265,7 +266,7 @@ export function planDay({ date, state, now = null }) {
       continue;
     }
     if (occ && occ.status === 'en_curso' && occ.startMin != null) {
-      const len = dur + (Number(occ.extraMin) || 0);
+      const len = Math.max(5, dur + (Number(occ.extraMin) || 0) - (Number(occ.elapsedBefore) || 0));
       blocks.push({ ...taskBlock(inst, occ.startMin), start: occ.startMin, end: occ.startMin + len, taskStart: occ.startMin, taskEnd: occ.startMin + len, status: 'en_curso' });
       continue;
     }
@@ -296,6 +297,10 @@ export function planDay({ date, state, now = null }) {
   let used = 0;
 
   flex.sort((a, b) => {
+    // lo que quedó en pausa por un mandado se retoma primero
+    const ra = a.occ && a.occ.resumeFirst ? 0 : 1;
+    const rb = b.occ && b.occ.resumeFirst ? 0 : 1;
+    if (ra !== rb) return ra - rb;
     const pa = a.task.priority || 2;
     const pb = b.task.priority || 2;
     if (pa !== pb) return pa - pb;

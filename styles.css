@@ -78,13 +78,13 @@ h3 { font-size: 1rem; }
 
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  display: grid; grid-template-columns: repeat(6, 1fr);
   background: var(--surface); border-top: 1px solid var(--line);
   padding-bottom: var(--safe-bottom);
 }
 .tab {
   border: 0; background: none; padding: 8px 0 10px; display: grid; justify-items: center; gap: 2px;
-  font-size: .72rem; color: var(--muted); min-height: 56px;
+  font-size: .66rem; color: var(--muted); min-height: 56px;
 }
 .tab .ti { font-size: 1.15rem; line-height: 1; }
 .tab.active { color: var(--accent); font-weight: 600; }
