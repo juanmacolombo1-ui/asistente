@@ -42,6 +42,7 @@ export const REASONS = [
 export const DAY_TYPES = {
   manana: 'Turno mañana',
   tarde: 'Turno tarde',
+  sabado: 'Sábado de trabajo',
   libre: 'Día libre',
   vacaciones: 'Vacaciones',
 };
@@ -52,7 +53,9 @@ export function defaultSettings(today = dateKey()) {
     shifts: {
       manana: { start: '07:30', end: '14:45' },
       tarde: { start: '14:30', end: '20:30' },
+      sabado: { start: '09:30', end: '15:30' },
     },
+    saturdayWithTarde: true, // en semanas de turno tarde también se trabaja el sábado
     travelMin: 30, // se usa el máximo estimado (20–30) para no llegar tarde
     prepMin: 25, // prepararse antes de salir
     workDays: [1, 2, 3, 4, 5],
@@ -74,6 +77,14 @@ export function defaultSettings(today = dateKey()) {
           { name: 'Desayuno', time: '08:45', dur: 25 },
           { name: 'Almuerzo', time: '12:45', dur: 40 },
           { name: 'Cena', time: '21:15', dur: 40 },
+        ],
+      },
+      sabado: {
+        wake: '07:45', bed: '00:30',
+        meals: [
+          { name: 'Desayuno', time: '08:00', dur: 25 },
+          { name: 'Almuerzo', time: '16:15', dur: 40 },
+          { name: 'Cena', time: '21:30', dur: 45 },
         ],
       },
       libre: {

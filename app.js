@@ -3,7 +3,7 @@ import { Store, exportJSON, validateImport, migrate } from './store.js';
 import { CATEGORIES, PRIORITIES, REASONS, DAY_TYPES, HOME_AREAS, newTask, newProject, homePresets, newId } from './defaults.js';
 import {
   planDay, nowAndNext, computeAlarms, announceStart, morningBrief, pendingDecisions, diffPlans,
-  validateFixedTime, occKey, getDayType, occursOn, taskPhrase,
+  validateFixedTime, occKey, getDayType, occursOn, taskPhrase, isWorkDay,
 } from './planner.js';
 import { parseTaskText, parseCommand } from './parser.js';
 import { recordActual, applyLearning } from './learning.js';
@@ -102,7 +102,7 @@ function blockIcon(b) {
 }
 
 function dayChip(dt) {
-  const cls = dt === 'manana' || dt === 'tarde' ? 'work' : 'ok';
+  const cls = isWorkDay(dt) ? 'work' : 'ok';
   return `<span class="chip ${cls}">${esc(DAY_TYPES[dt])}</span>`;
 }
 
@@ -725,6 +725,8 @@ function viewAjustes() {
     <div class="row" style="margin:8px 0 4px">${['manana', 'tarde'].map((x) => `<button class="chip ${shiftOf(nextMon) === x ? 'on' : ''}" data-act="weekShift" data-mon="${nextMon}" data-shift="${x}">${DAY_TYPES[x]}</button>`).join('')}</div>
     ${toggle('rotation.enabled', 'Alternar turnos automáticamente cada semana')}
     <div class="grid2">${time('shifts.manana.start', 'Mañana: entrada')}${time('shifts.manana.end', 'Mañana: salida')}${time('shifts.tarde.start', 'Tarde: entrada')}${time('shifts.tarde.end', 'Tarde: salida')}</div>
+    ${toggle('saturdayWithTarde', 'En semanas de turno tarde también trabajo el sábado')}
+    <div class="grid2">${time('shifts.sabado.start', 'Sábado: entrada')}${time('shifts.sabado.end', 'Sábado: salida')}</div>
     <div class="grid2">${num('travelMin', 'Viaje por tramo (min)')}${num('prepMin', 'Prepararme para salir (min)')}</div>
     <div class="field"><span class="small muted" style="font-weight:600">Días que trabajo</span><div class="days" style="margin-top:6px">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<button data-act="workDay" data-day="${d}" class="${s.workDays.includes(d) ? 'on' : ''}">${WEEKDAYS_SHORT[d]}</button>`).join('')}</div></div>
   </details>
@@ -736,6 +738,7 @@ function viewAjustes() {
   </details>
   ${profile('manana', 'Sueño y comidas · semana de mañana')}
   ${profile('tarde', 'Sueño y comidas · semana de tarde')}
+  ${profile('sabado', 'Sueño y comidas · sábado de trabajo')}
   ${profile('libre', 'Sueño y comidas · días libres')}
   <details class="acc"><summary>Planificación</summary>
     <div class="grid2">${num('bufferPct', 'Margen libre (%)', 'min="0" max="60"')}${num('gapMin', 'Separación entre tareas (min)', 'min="0" max="60"')}</div>
@@ -1458,7 +1461,7 @@ function openOnboarding() {
     <p class="small muted">Tres cosas y listo. Todo se puede cambiar después en Más → Ajustes.</p>
     <div class="section-title">1. ¿Qué turno tenés esta semana?</div>
     <div class="row">${['manana', 'tarde'].map((x) => `<button class="chip ${getDayType(mon, { ...s, overrides: {}, workDays: [1] }) === x ? 'on' : ''}" data-act="weekShift" data-mon="${mon}" data-shift="${x}" data-stay="1">${DAY_TYPES[x]}</button>`).join('')}</div>
-    <p class="tiny muted">Mañana ${s.shifts.manana.start}–${s.shifts.manana.end} · Tarde ${s.shifts.tarde.start}–${s.shifts.tarde.end} · viaje ${s.travelMin} min. Las semanas se alternan solas.</p>
+    <p class="tiny muted">Mañana ${s.shifts.manana.start}–${s.shifts.manana.end} · Tarde ${s.shifts.tarde.start}–${s.shifts.tarde.end} (y sábado ${s.shifts.sabado.start}–${s.shifts.sabado.end}) · viaje ${s.travelMin} min. Las semanas se alternan solas.</p>
     <div class="section-title">2. Tareas de la casa</div>
     <button class="btn" style="width:100%" data-act="homePresets" data-stay="1">🏠 Cargar tareas de hogar sugeridas</button>
     <div class="section-title">3. Sonido y voz</div>

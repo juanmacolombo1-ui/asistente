@@ -5,9 +5,8 @@ import { DAY_TYPES } from './defaults.js';
 
 // ---------- Tipo de día y bloques fijos ----------
 
-export function getDayType(date, s) {
-  if (s.overrides && s.overrides[date]) return s.overrides[date];
-  if (!s.workDays.includes(weekday(date))) return 'libre';
+/** Turno de la semana (de lunes a domingo) que contiene la fecha. */
+export function weekShift(date, s) {
   const mon = mondayOf(date);
   if (s.weekShifts && s.weekShifts[mon]) return s.weekShifts[mon];
   if (s.rotation && s.rotation.enabled) {
@@ -19,7 +18,15 @@ export function getDayType(date, s) {
   return 'manana';
 }
 
-export const isWorkDay = (t) => t === 'manana' || t === 'tarde';
+export function getDayType(date, s) {
+  if (s.overrides && s.overrides[date]) return s.overrides[date];
+  const wd = weekday(date);
+  if (wd === 6 && s.saturdayWithTarde && s.shifts.sabado && weekShift(date, s) === 'tarde') return 'sabado';
+  if (!s.workDays.includes(wd)) return 'libre';
+  return weekShift(date, s);
+}
+
+export const isWorkDay = (t) => t === 'manana' || t === 'tarde' || t === 'sabado';
 
 export function profileFor(dayType, s) {
   return s.profiles[dayType] || s.profiles.libre;
@@ -497,6 +504,7 @@ export function morningBrief(plan, state) {
   const dt = plan.dayType;
   if (dt === 'manana') parts.push('Buen día. Hoy trabajás de mañana.');
   else if (dt === 'tarde') parts.push('Buen día. Hoy trabajás de tarde.');
+  else if (dt === 'sabado') parts.push(`Buen día. Hoy es sábado de trabajo, de ${fmtHM(parseHM(state.settings.shifts.sabado.start))} a ${fmtHM(parseHM(state.settings.shifts.sabado.end))}.`);
   else if (dt === 'vacaciones') parts.push('Buen día. Hoy estás de vacaciones.');
   else parts.push('Buen día. Hoy tenés el día libre.');
   if (plan.leaveAt != null) parts.push(`Salís a las ${fmtHM(plan.leaveAt)}.`);
