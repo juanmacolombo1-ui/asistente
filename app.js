@@ -5,7 +5,7 @@ import {
   planDay, nowAndNext, computeAlarms, announceStart, morningBrief, pendingDecisions, diffPlans,
   validateFixedTime, occKey, getDayType, occursOn, taskPhrase, isWorkDay,
 } from './planner.js';
-import { parseTaskText, parseCommand } from './parser.js';
+import { parseTaskText, parseCommand, normalize, findTask } from './parser.js';
 import { recordActual, applyLearning } from './learning.js';
 import { computeStats, rangeFor, reasonLabel } from './stats.js';
 import { buildICS } from './ics.js';
@@ -198,6 +198,7 @@ function viewAhora() {
       <button class="chip" data-act="cmd" data-text="¿Qué sigue?">¿Qué sigue?</button>
       <button class="chip" data-act="cmd" data-text="Reorganizá mi día">Reorganizá mi día</button>
       <button class="chip" data-act="cmd" data-text="Estoy cansado">Estoy cansado</button>
+      <button class="chip" data-act="switch">↔ Hacer otra cosa</button>
       <button class="chip" data-act="brief">🔈 Mi día</button>
       <button class="chip" data-act="focus" data-min="${state.settings.focus.defaultMin}">⏱ Concentración</button>
     </div>`);
@@ -232,6 +233,7 @@ function heroCard(p, current, nextTask, late) {
         <button class="btn ok big full" data-act="done" data-key="${current.key}">✓ Terminé</button>
         <button class="btn" data-act="more" data-key="${current.key}" data-min="10">+10 min</button>
         <button class="btn" data-act="focus" data-key="${current.key}" data-min="${Math.min(60, Math.max(5, Math.round(end - n)))}">⏱ Concentrarme</button>
+        <button class="btn full" data-act="switch" data-key="${current.key}">↔ Cambiar a otra tarea</button>
         <button class="btn ghost full" data-act="cant" data-key="${current.key}">No puedo seguir ahora</button>
       </div></div>`;
   }
@@ -257,6 +259,7 @@ function heroCard(p, current, nextTask, late) {
         <button class="btn primary big full" data-act="start" data-key="${t.key}">▶ Empezar</button>
         <button class="btn" data-act="done" data-key="${t.key}">✓ Ya la hice</button>
         <button class="btn" data-act="cant" data-key="${t.key}">No puedo</button>
+        <button class="btn full" data-act="switch" data-key="${t.key}">↔ Empecé por otra tarea</button>
         <button class="btn ghost full" data-act="announce" data-key="${t.key}">🔈 Escuchar</button>
       </div></div>`;
   }
@@ -1140,6 +1143,86 @@ function blockMenu(key) {
     </div>`);
 }
 
+// ---------- Cambiar de tarea ----------
+
+/** Devuelve la clave de la tarea para hoy, creándola si hoy no le tocaba. */
+function todayKeyFor(task) {
+  const d = today();
+  if (occursOn(task, d, getDayType(d, state.settings))) return occKey(task.id, d);
+  const moved = Object.entries(state.occ).find(([k, o]) => k.startsWith(task.id + '@') && o.postponedTo === d);
+  if (moved) return moved[0];
+  if (task.recurrence.type === 'once') {
+    const key = occKey(task.id, task.date);
+    ensureOcc(key).postponedTo = d;
+    return key;
+  }
+  const key = occKey(task.id, d);
+  ensureOcc(key).extra = true;
+  return key;
+}
+
+function switchTo(taskId, fromKey) {
+  const task = taskById(taskId);
+  if (!task) return;
+  const key = todayKeyFor(task);
+  closeSheet();
+  if (state.occ[key] && state.occ[key].status === 'en_curso') {
+    toast(`Ya estás con ${task.name}.`);
+    return;
+  }
+  const fromTask = fromKey && fromKey !== key ? taskById(fromKey.split('@')[0]) : null;
+  if (fromTask) {
+    const fo = ensureOcc(fromKey);
+    if (!fromTask.fixedTime) fo.pinnedStart = null; // que se reacomode después
+    fo.switchedAway = (fo.switchedAway || 0) + 1;
+  }
+  startTask(key);
+  if (fromTask) toast(`Dale. «${fromTask.name}» queda para después: ya la reacomodé en tu agenda.`);
+}
+
+function switchNew(text, fromKey) {
+  if (!text || !text.trim()) return;
+  const t = taskFromText(text);
+  t.fixedTime = null;
+  t.date = today();
+  t.startDate = today();
+  state.tasks.push(t);
+  switchTo(t.id, fromKey);
+}
+
+function openSwitchSheet(fromKey = null, query = '') {
+  const p = plan();
+  const fromTaskId = fromKey ? fromKey.split('@')[0] : null;
+  const from = fromTaskId ? taskById(fromTaskId) : null;
+  const todays = p.blocks.filter((b) => b.type === 'task' && !b.done && b.status !== 'en_curso' && b.taskId !== fromTaskId);
+  const seen = new Set(todays.map((b) => b.taskId));
+  const unsched = p.unscheduled.filter((u) => u.inst.task.id !== fromTaskId && !seen.has(u.inst.task.id));
+  unsched.forEach((u) => seen.add(u.inst.task.id));
+  const running = p.blocks.find((b) => b.type === 'task' && b.status === 'en_curso');
+  if (running) seen.add(running.taskId);
+  const others = state.tasks.filter((t) => !t.archived && !t.adhoc && t.id !== fromTaskId && !seen.has(t.id));
+  const item = (id, name, meta) => `<li data-act="switchPick" data-id="${id}" data-from="${fromKey || ''}" data-n="${esc(normalize(name))}" style="cursor:pointer">
+    <div class="grow"><div class="name">${esc(name)}</div><div class="small muted">${esc(meta)}</div></div><span class="btn sm primary">▶</span></li>`;
+  openSheet(`<h2>¿Qué vas a hacer?</h2>
+    ${from ? `<p class="small muted">«${esc(from.name)}» queda para después: la reacomodo sola en tu agenda.</p>` : ''}
+    <input type="text" id="swq" placeholder="Buscar, o escribir una tarea nueva" value="${esc(query)}" autocomplete="off">
+    <div class="section-title">De hoy</div>
+    <ul class="list">${todays.map((b) => item(b.taskId, b.label, `${fmtHM(b.taskStart)} · ${durationShort(b.durationMin)}`)).join('') || '<li class="small muted">No hay otras tareas para hoy.</li>'}
+    ${unsched.map((u) => item(u.inst.task.id, u.inst.task.name, `Sin lugar hoy · ${durationShort(u.inst.task.durationMin)}`)).join('')}</ul>
+    ${others.length ? `<div class="section-title">Otras tareas</div><ul class="list">${others.map((t) => item(t.id, t.name, `${durationShort(t.durationMin)} · ${recText(t)}`)).join('')}</ul>` : ''}
+    <div id="swNew"></div>
+    <div class="btns"><button class="btn ghost full" data-act="closeSheet">Cancelar</button></div>`, (sheet) => {
+    const q = $('#swq', sheet);
+    const apply = () => {
+      const v = normalize(q.value);
+      $$('[data-n]', sheet).forEach((li) => li.classList.toggle('hidden', !!v && !li.dataset.n.includes(v)));
+      $('#swNew', sheet).innerHTML = v ? `<button class="btn primary" style="width:100%;margin-top:14px" data-act="switchNew" data-from="${fromKey || ''}">▶ Empezar «${esc(q.value.trim())}» como tarea nueva</button>` : '';
+    };
+    q.addEventListener('input', apply);
+    apply();
+  });
+}
+
 // ---------- Concentración ----------
 
 function startFocus({ minutes, key = null, projectId = null }) {
@@ -1295,6 +1378,7 @@ function showAlarm(block, a = null) {
       <button class="btn primary big" data-act="start" data-key="${block.key}">▶ Empezar</button>
       <div class="snooze">${[5, 10, 15, 30].map((m) => `<button class="btn" data-act="snooze" data-key="${block.key}" data-min="${m}">+${m}</button>`).join('')}</div>
       <div class="btns"><button class="btn" data-act="cant" data-key="${block.key}">No puedo</button><button class="btn" data-act="announce" data-key="${block.key}">🔈 Escuchar</button>
+      <button class="btn full" data-act="switch" data-key="${block.key}">↔ Hago otra cosa</button>
       <button class="btn full" data-act="closeAlarm">Cerrar sin decidir</button></div>
     </div>`;
   document.body.appendChild(el);
@@ -1370,6 +1454,24 @@ function handleCommand(text) {
     case 'cant':
       if (b) openCantSheet(b.key);
       break;
+    case 'switch': {
+      let from = running || b;
+      if (c.instead) {
+        // «En vez de X…»: la que queda para después es X, si está en la agenda de hoy
+        const todays = plan().blocks.filter((x) => x.type === 'task' && !x.done);
+        const insteadTask = findTask(c.instead, todays.map((x) => taskById(x.taskId)).filter(Boolean));
+        if (insteadTask) from = todays.find((x) => x.taskId === insteadTask.id) || from;
+      }
+      if (!c.target) {
+        openSwitchSheet(from ? from.key : null);
+        break;
+      }
+      const todayIds = new Set(plan().blocks.filter((x) => x.type === 'task').map((x) => x.taskId));
+      const hit = findTask(c.target, state.tasks.filter((t) => !t.archived && !t.adhoc), todayIds);
+      if (hit) switchTo(hit.id, from && from.taskId !== hit.id ? from.key : null);
+      else openSwitchSheet(from ? from.key : null, c.target);
+      break;
+    }
     case 'tired':
       openTiredSheet();
       break;
@@ -1494,6 +1596,13 @@ const ACTIONS = {
   more: (d) => moreTime(d.key, Number(d.min)),
   cant: (d) => { if (isTest(d.key)) return; closeAlarm(); openCantSheet(d.key); },
   cantDo: (d) => cantDo(d.key, d.do),
+  switch: (d) => {
+    const k = d.key && d.key !== 'prueba@x' ? d.key : (targetBlock()?.key || null);
+    closeAlarm();
+    openSwitchSheet(k);
+  },
+  switchPick: (d) => switchTo(d.id, d.from || null),
+  switchNew: (d) => switchNew($('#swq')?.value, d.from || null),
   snooze: (d) => { if (!isTest(d.key)) snooze(d.key, d.min); },
   announce: (d) => {
     if (d.key === 'prueba@x') return speak('Es hora de limpiar la casa. Esto es una prueba.');

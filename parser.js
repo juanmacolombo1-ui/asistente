@@ -218,6 +218,8 @@ const COMMANDS = [
 export function parseCommand(text) {
   const t = normalize(text);
   if (!t) return { intent: 'unknown' };
+  const sw = parseSwitch(t);
+  if (sw) return sw;
   for (const [intent, re] of COMMANDS) {
     const m = re.exec(t);
     if (!m) continue;
@@ -237,4 +239,43 @@ export function parseCommand(text) {
     return { intent: 'add', text };
   }
   return { intent: 'unknown' };
+}
+
+// ---------- Cambiar de tarea ----------
+
+const SWITCH_RES = [
+  /\ben vez de (.+?) (?:hago|voy a hacer|me pongo con|estoy haciendo|hice|empece con|empece por|arranque con|arranque por|empiezo con|empiezo por|arranco con|arranco por) (.+)$/,
+  /\b(?:empece|arranque|comence|empiezo|arranco|voy a empezar|voy a arrancar|mejor empiezo|mejor arranco) (?:por|con) (.+)$/,
+  /\b(?:mejor hago|hago primero|prefiero hacer|me pongo con|cambio a) (.+)$/,
+];
+
+/** «En vez de limpiar la cocina, empecé por la caja» -> { intent: 'switch', target: 'la caja', instead: 'limpiar la cocina' } */
+export function parseSwitch(t) {
+  let m = SWITCH_RES[0].exec(t);
+  if (m) return { intent: 'switch', instead: m[1].trim(), target: m[2].trim() };
+  for (const re of SWITCH_RES.slice(1)) {
+    m = re.exec(t);
+    if (m) return { intent: 'switch', target: m[1].trim() };
+  }
+  if (/\b(hacer otra cosa|hago otra cosa|otra tarea|cambiar de tarea|cambio de tarea|hacer otra)\b/.test(t)) return { intent: 'switch', target: '' };
+  return null;
+}
+
+const STOP = new Set(['la', 'el', 'los', 'las', 'de', 'del', 'a', 'al', 'y', 'con', 'por', 'un', 'una', 'unos', 'unas', 'lo', 'mi', 'mis', 'que', 'en', 'primero', 'ahora', 'tarea', 'cosa']);
+const stem = (w) => w.replace(/(es|s)$/, '');
+const tokens = (s) => normalize(s).replace(/[^a-z0-9 ]/g, ' ').split(' ').filter((w) => w && !STOP.has(w)).map(stem).filter(Boolean);
+
+/** Busca la tarea a la que se refiere una frase («la caja» -> «Limpiar las cajas de los gatos»). */
+export function findTask(text, tasks, preferIds = new Set()) {
+  const q = tokens(text);
+  if (!q.length) return null;
+  let best = null;
+  for (const t of tasks) {
+    const tt = tokens(`${t.name} ${t.area || ''}`);
+    const hit = q.filter((w) => tt.some((x) => x === w || (w.length >= 4 && x.length >= 4 && (x.startsWith(w) || w.startsWith(x))))).length;
+    if (!hit) continue;
+    const score = hit / q.length + (preferIds.has(t.id) ? 0.05 : 0) - tt.length * 0.001;
+    if (!best || score > best.score) best = { task: t, score, ratio: hit / q.length };
+  }
+  return best && best.ratio >= 0.5 ? best.task : null;
 }

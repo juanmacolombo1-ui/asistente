@@ -113,17 +113,21 @@ export function instancesForDay(date, state, dayType) {
     const key = occKey(task.id, date);
     const occ = state.occ[key];
     if (occ && occ.status === 'cancelada') continue;
-    if (occ && occ.status === 'pospuesta' && occ.postponedTo && occ.postponedTo !== date) continue;
+    if (occ && occ.postponedTo && occ.postponedTo !== date) continue;
     out.push({ key, task, occ: occ || null, date, origin: date });
   }
   // Tareas pospuestas desde otro día hacia esta fecha.
   for (const [key, occ] of Object.entries(state.occ)) {
-    if (occ.postponedTo !== date) continue;
-    if (!['pospuesta', 'en_curso', 'completada', 'pendiente'].includes(occ.status)) continue;
     const [taskId, origin] = key.split('@');
-    if (origin === date) continue;
     const task = taskById.get(taskId);
     if (!task || task.archived) continue;
+    if (occ.extra && origin === date) {
+      // Tarea que el usuario decidió hacer hoy aunque no le tocaba (ej. «empecé por otra cosa»).
+      if (occ.status !== 'cancelada' && !occursOn(task, date, dayType)) out.push({ key, task, occ, date, origin });
+      continue;
+    }
+    if (occ.postponedTo !== date || origin === date) continue;
+    if (!['pospuesta', 'en_curso', 'completada', 'pendiente'].includes(occ.status)) continue;
     out.push({ key, task, occ, date, origin });
   }
   return out;

@@ -1,5 +1,5 @@
 // Service worker: guarda la app para que abra sin conexión.
-const VERSION = 'asistente-v2';
+const VERSION = 'asistente-v3';
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'app.js', 'planner.js', 'parser.js', 'time.js', 'defaults.js', 'store.js',
