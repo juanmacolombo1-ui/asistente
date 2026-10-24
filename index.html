@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14161c" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Asistente">
+  <meta name="description" content="Asistente personal de tareas, hábitos y recordatorios">
+  <title>Asistente</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar" id="topbar"></header>
+  <main id="view" tabindex="-1"></main>
+  <nav class="tabs" id="tabs" aria-label="Secciones">
+    <button data-tab="ahora" class="tab"><span class="ti">◉</span><span>Ahora</span></button>
+    <button data-tab="agenda" class="tab"><span class="ti">▤</span><span>Agenda</span></button>
+    <button data-tab="tareas" class="tab"><span class="ti">✓</span><span>Tareas</span></button>
+    <button data-tab="proyectos" class="tab"><span class="ti">◆</span><span>Proyectos</span></button>
+    <button data-tab="mas" class="tab"><span class="ti">≡</span><span>Más</span></button>
+  </nav>
+  <div id="sheet-root"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript>Esta app necesita JavaScript.</noscript>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
